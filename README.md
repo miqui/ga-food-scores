@@ -122,7 +122,7 @@ npm test             # vitest run
 ### 3. Start the dev server
 
 ```bash
-JWT_SECRET="e2e-test-secret-do-not-use-in-prod" PORT=3344 DB_PATH="./data/e2e.db" npx tsx src/server.ts
+JWT_SECRET="e2e-test-secret-do-not-use-in-prod" PORT=3344 DB_PATH="./data/app.db" npx tsx src/server.ts
 ```
 ```
 ga-coastal-food-scores listening on http://localhost:3344
@@ -169,7 +169,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3344/facilities   # no
 ### 6. Run the sync CLI against the live portal (one small county)
 
 ```bash
-JWT_SECRET="e2e-test-secret-do-not-use-in-prod" DB_PATH="./data/e2e.db" npx tsx src/ingest/cli.ts LONG
+JWT_SECRET="e2e-test-secret-do-not-use-in-prod" DB_PATH="./data/app.db" npx tsx src/ingest/cli.ts LONG
 ```
 ```
 [sync] starting county=LONG
