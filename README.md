@@ -61,6 +61,37 @@ COASTAL_COUNTIES=BRYAN,CAMDEN,CHATHAM,EFFINGHAM,GLYNN,LIBERTY,LONG,MCINTOSH
 
 `JWT_SECRET` is required — the server refuses to start without it (fail fast).
 
+## Load the database
+
+There is no seed file or migration step. The database is a SQLite file at `DB_PATH`
+(default `./data/app.db`). Tables are created automatically on first open, and you
+fill it by running the ingest against the live portal.
+
+```bash
+npm install
+npm run sync -- LONG   # one county (fast, ~36 facilities)
+npm run sync           # all 8 coastal counties (slow, rate-limited)
+```
+
+Notes:
+
+- The sync CLI reads real environment variables only, not `.env`. For a non-default
+  path, pass it inline: `DB_PATH=./data/app.db npm run sync -- LONG`.
+- Re-running is safe: records are upserted, and a per-county watermark is kept in
+  `sync_state`.
+- Use the same `DB_PATH` for the server (`npm run dev`) and the sync.
+- If you see `Could not locate the bindings file`, the native `better-sqlite3`
+  build was skipped. Newer npm blocks install scripts by default; run
+  `npm install-scripts approve better-sqlite3 && npm rebuild better-sqlite3`.
+- Alternatively, an admin can trigger an ingest via `POST /admin/sync`.
+
+Query the data directly with the `sqlite3` CLI:
+
+```bash
+sqlite3 -header -column data/app.db \
+  "SELECT name, city, last_inspection_score FROM facilities WHERE county='LONG' ORDER BY last_inspection_score LIMIT 10;"
+```
+
 ## Run manually
 
 These are the exact commands run to verify this project, with real output.
