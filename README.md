@@ -42,7 +42,7 @@ results and upserts facilities/inspections/violations, usable both as a CLI
 | GET    | `/facilities`                | JWT           | query: `county`, `city`, `min_score`, `q`, `page` |
 | GET    | `/facilities/:id`            | JWT           | single facility                          |
 | GET    | `/facilities/:id/inspections`| JWT           | inspection history for a facility        |
-| GET    | `/inspections/:id`           | JWT           | one inspection + its violations          |
+| GET    | `/inspections/:id`           | JWT           | one inspection + its violations; `:id` is the portal `inspectionId` |
 | POST   | `/admin/sync`                | JWT + admin   | triggers an async ingest run, returns 202 |
 
 Auth: send `Authorization: Bearer <token>` from `/auth/login`. `401` = missing/invalid/expired

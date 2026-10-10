@@ -165,7 +165,7 @@ describe('facilities API', () => {
       })
       .run();
 
-    const res = await app.request(`/inspections/${inspectionLocalId}`, {
+    const res = await app.request('/inspections/2002', {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);

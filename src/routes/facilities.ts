@@ -81,12 +81,16 @@ export function facilitiesRoutes(getDb: () => AppDb) {
     const db = getDb();
     const id = Number.parseInt(c.req.param('id'), 10);
     if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
-    const inspection = db.select().from(inspections).where(eq(inspections.id, id)).get();
+    const inspection = db
+      .select()
+      .from(inspections)
+      .where(eq(inspections.inspectionId, id))
+      .get();
     if (!inspection) return c.json({ error: 'not found' }, 404);
     const violationRows = db
       .select()
       .from(violations)
-      .where(eq(violations.inspectionId, id))
+      .where(eq(violations.inspectionId, inspection.id))
       .all();
     return c.json({ ...inspection, violations: violationRows });
   });
