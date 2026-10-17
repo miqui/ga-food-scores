@@ -17,7 +17,7 @@
     "sync": "tsx src/ingest/cli.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
+    "@hono/node-server": "^2.1.5",
     "better-sqlite3": "^11.6.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.6.11",
