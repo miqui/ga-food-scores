@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { eq, and, gte, like, sql } from 'drizzle-orm';
 import { facilities, inspections, violations } from '../db/schema.js';
 import type { AppDb } from '../db/client.js';
-import { COASTAL_COUNTIES } from '../ingest/counties.js';
+import { GA_COUNTIES } from '../ingest/counties.js';
 
 const PAGE_SIZE = 20;
 
@@ -10,7 +10,7 @@ export function facilitiesRoutes(getDb: () => AppDb) {
   const app = new Hono();
 
   app.get('/counties', (c) => {
-    return c.json({ counties: COASTAL_COUNTIES });
+    return c.json({ counties: GA_COUNTIES });
   });
 
   app.get('/facilities', (c) => {
