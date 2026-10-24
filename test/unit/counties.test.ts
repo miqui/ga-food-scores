@@ -32,10 +32,9 @@ describe('Georgia county list', () => {
     expect(() => resolveCounties(['LONG', 'CHATAM', 'FOO'])).toThrow(/CHATAM, FOO/);
   });
 
-  it('defaults to all counties, honoring SYNC_COUNTIES then legacy COASTAL_COUNTIES', () => {
+  it('defaults to all counties unless SYNC_COUNTIES is set', () => {
     expect(defaultSyncCounties({})).toEqual(GA_COUNTIES);
     expect(defaultSyncCounties({ SYNC_COUNTIES: 'long, ben hill' })).toEqual(['LONG', 'BEN HILL']);
-    expect(defaultSyncCounties({ COASTAL_COUNTIES: 'BRYAN,LONG' })).toEqual(['BRYAN', 'LONG']);
     expect(() => defaultSyncCounties({ SYNC_COUNTIES: 'CHATAM' })).toThrow(UnknownCountyError);
   });
 });

@@ -1,6 +1,6 @@
-# ga-coastal-food-scores
+# ga-food-scores
 
-Read-only REST API serving Georgia Coastal Health District restaurant food-inspection
+Read-only REST API serving Georgia restaurant food-inspection
 scores (facilities, inspections, violations), backed by a rate-limited ingest worker
 that pulls from the Georgia DPH inspection portal.
 
@@ -87,8 +87,8 @@ Notes:
   path, pass it inline: `DB_PATH=./data/app.db npm run sync -- LONG`.
 - Re-running is safe: records are upserted, and a per-county watermark is kept in
   `sync_state`.
-- `SYNC_COUNTIES` (comma-separated) limits a run with no county arguments; the old
-  `COASTAL_COUNTIES` variable is still honored. Unknown county names are rejected.
+- `SYNC_COUNTIES` (comma-separated) limits a run with no county arguments. Unknown
+  county names are rejected.
 - A full statewide first load is long: the portal is fetched at 1 request/second, and
   Fulton alone is ~1,700 search pages plus one request per facility (~3 hours).
   Later runs only walk until they reach pages older than the watermark.
@@ -140,7 +140,7 @@ npm test             # vitest run
 JWT_SECRET="e2e-test-secret-do-not-use-in-prod" PORT=3344 DB_PATH="./data/app.db" npx tsx src/server.ts
 ```
 ```
-ga-coastal-food-scores listening on http://localhost:3344
+ga-food-scores listening on http://localhost:3344
 ```
 
 ### 4. Health check

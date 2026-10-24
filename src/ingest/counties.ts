@@ -58,10 +58,10 @@ export function resolveCounties(names: unknown[]): string[] {
 
 /**
  * Default county set for a sync run: SYNC_COUNTIES (comma-separated), falling back to
- * the legacy COASTAL_COUNTIES env var, then to all of Georgia.
+ * all of Georgia.
  */
 export function defaultSyncCounties(env: NodeJS.ProcessEnv = process.env): string[] {
-  const raw = env.SYNC_COUNTIES ?? env.COASTAL_COUNTIES;
+  const raw = env.SYNC_COUNTIES;
   if (!raw) return GA_COUNTIES;
   return resolveCounties(raw.split(',').filter((c) => c.trim() !== ''));
 }
