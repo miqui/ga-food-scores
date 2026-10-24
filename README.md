@@ -109,15 +109,21 @@ added 205 packages, and audited 206 packages in 6s
 ### 2. Typecheck, lint, build, test
 
 ```bash
-npm run typecheck   # tsc --noEmit -> no output, exit 0
+npm run typecheck   # TypeScript 7 tsc --noEmit -> no output, exit 0
 npm run lint        # eslint . -> no output, exit 0
-npm run build        # tsc -> dist/ produced, exit 0
+npm run build        # TypeScript 7 tsc -> dist/ produced, exit 0
 npm test             # vitest run
 ```
 ```
  Test Files  4 passed (4)
       Tests  19 passed (19)
 ```
+
+The compiler is TypeScript 7 (`typescript-7` in devDependencies, called by `build` and
+`typecheck`). The `typescript` package itself stays on 6.0.x because typescript-eslint
+loads the TypeScript compiler API, which TypeScript 7 no longer ships, and only supports
+TypeScript <6.1. Plain `npx tsc` therefore runs 6.0.x; use the npm scripts. Once
+typescript-eslint supports TypeScript 7, bump `typescript` to 7 and drop the alias.
 
 ### 3. Start the dev server
 
