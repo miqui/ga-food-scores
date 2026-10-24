@@ -111,19 +111,13 @@ added 205 packages, and audited 206 packages in 6s
 ```bash
 npm run typecheck   # TypeScript 7 tsc --noEmit -> no output, exit 0
 npm run lint        # eslint . -> no output, exit 0
-npm run build        # TypeScript 7 tsc -> dist/ produced, exit 0
+npm run build        # TypeScript 7 tsc -> dist/ produced, exit 0 (see "TypeScript 6 and 7 side by side")
 npm test             # vitest run
 ```
 ```
  Test Files  4 passed (4)
       Tests  19 passed (19)
 ```
-
-The compiler is TypeScript 7 (`typescript-7` in devDependencies, called by `build` and
-`typecheck`). The `typescript` package itself stays on 6.0.x because typescript-eslint
-loads the TypeScript compiler API, which TypeScript 7 no longer ships, and only supports
-TypeScript <6.1. Plain `npx tsc` therefore runs 6.0.x; use the npm scripts. Once
-typescript-eslint supports TypeScript 7, bump `typescript` to 7 and drop the alias.
 
 ### 3. Start the dev server
 
@@ -198,3 +192,36 @@ curl -s -X POST http://localhost:3344/admin/sync -H "Authorization: Bearer <admi
 
 (Admin role is assigned directly in the `users` table; there is no self-service
 promotion endpoint by design.)
+
+## TypeScript 6 and 7 side by side
+
+Two TypeScript versions are installed on purpose:
+
+| Package (devDependencies) | Version | Used by |
+|---|---|---|
+| `typescript-7` (alias of `typescript@^7.0.2`) | 7.0.x | `npm run build`, `npm run typecheck` |
+| `typescript` | 6.0.x | `npm run lint` (typescript-eslint), editors, plain `npx tsc` |
+
+Why: TypeScript 7 no longer ships the JavaScript compiler API (`require('typescript')`
+only returns a version stub). typescript-eslint is built on that API and supports only
+TypeScript `<6.1`, so it needs a 6.x install under the plain `typescript` name. npm
+`overrides` can't fix this because typescript-eslint takes `typescript` as a peer
+dependency, which resolves to the top-level package.
+
+Developer notes:
+
+- **TypeScript 7 is the source of truth for type errors.** Use `npm run typecheck`
+  (or `npm run build`) before pushing. Don't rely on `npx tsc`: `node_modules/.bin/tsc`
+  points at 6.0.x.
+- To run the TS 7 compiler with other flags, call it directly:
+  `node node_modules/typescript-7/bin/tsc --noEmit --watch`.
+- **Editors run 6.0.x.** The TS 7 package ships only the `tsc` CLI, with no `tsserver`,
+  so editors set to "Use Workspace Version" use `node_modules/typescript` (6.0.x). Editor
+  diagnostics can occasionally differ from TS 7; when they do, trust `npm run typecheck`.
+- `npm run dev`, `npm run sync` and `npm test` don't use either version for checking:
+  `tsx` and Vitest strip types with esbuild. A type error won't stop them from running.
+- Keep `tsconfig.json` valid for both versions (6.x for the editor and lint, 7.x for
+  the build).
+- **When typescript-eslint supports TypeScript 7:** set `typescript` to `^7`, remove the
+  `typescript-7` alias, change `build`/`typecheck` back to plain `tsc`, run
+  `npm install`, and delete this section.
