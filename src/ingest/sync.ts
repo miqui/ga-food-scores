@@ -52,10 +52,18 @@ export interface SyncResult {
   newWatermark: string | null;
 }
 
+/** Hard safety stop for a runaway walk; FULTON is ~1700 pages, so this leaves lots of headroom. */
+export const DEFAULT_MAX_PAGES = 10_000;
+
 /**
  * Walk a single county's paginated search results newest-inspection-first,
  * upsert facility rows, and stop as soon as we see a page whose records are
- * all at/below the stored watermark (nothing new left to find).
+ * all strictly older than the stored watermark (nothing new left to find).
+ * Records dated on the watermark day itself don't stop the walk, since more
+ * inspections for that day may have been posted after the last sync.
+ * If maxPages is hit before the results run out, the run throws without
+ * advancing the watermark, so the next run starts over instead of skipping
+ * the unwalked tail.
  * Facilities whose last-inspection score/date changed (or are new) get their
  * full inspection + violation history re-fetched.
  */
@@ -76,11 +84,15 @@ export async function syncCounty(
   let inspectionsUpserted = 0;
   let violationsUpserted = 0;
   let newestDateSeen: string | null = null;
-  const maxPages = options.maxPages ?? 1000;
+  const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+  let reachedEnd = false;
 
   while (page <= maxPages) {
     const records = await client.searchCounty(county, page);
-    if (records.length === 0) break;
+    if (records.length === 0) {
+      reachedEnd = true;
+      break;
+    }
     pagesWalked += 1;
 
     let allBelowWatermark = true;
@@ -92,9 +104,9 @@ export async function syncCounty(
         newestDateSeen = parsed.lastInspectionDate || newestDateSeen;
       }
 
-      const isNewOrChanged =
-        !watermark || !parsed.lastInspectionDate || parsed.lastInspectionDate > watermark;
-      if (isNewOrChanged) {
+      const belowWatermark =
+        !!watermark && !!parsed.lastInspectionDate && parsed.lastInspectionDate < watermark;
+      if (!belowWatermark) {
         allBelowWatermark = false;
       }
 
@@ -171,9 +183,16 @@ export async function syncCounty(
     }
 
     if (watermark && allBelowWatermark) {
+      reachedEnd = true;
       break;
     }
     page += 1;
+  }
+
+  if (!reachedEnd) {
+    throw new Error(
+      `sync county=${county} hit maxPages=${maxPages} before the end of results; watermark not advanced`,
+    );
   }
 
   const newWatermark = newestDateSeen ?? watermark;

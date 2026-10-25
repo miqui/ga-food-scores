@@ -1,7 +1,7 @@
 {
-  "name": "ga-coastal-food-scores",
+  "name": "ga-food-scores",
   "version": "1.0.0",
-  "description": "Read-only REST API for Georgia Coastal Health District restaurant inspection scores",
+  "description": "Read-only REST API for Georgia restaurant inspection scores",
   "type": "module",
   "license": "MIT",
   "engines": {

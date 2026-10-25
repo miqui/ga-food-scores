@@ -74,10 +74,10 @@ describe('ingest walker against fixtures (no network)', () => {
     expect(stateRow?.watermark).toBe('2026-08-07');
   });
 
-  it('stops walking once a page is entirely at/below the stored watermark', async () => {
+  it('stops walking once a page is entirely below the stored watermark', async () => {
     const { db } = createDb(':memory:');
     db.insert(syncState)
-      .values({ county: 'LONG', watermark: '2026-08-07', lastSyncedAt: new Date().toISOString() })
+      .values({ county: 'LONG', watermark: '2026-08-08', lastSyncedAt: new Date().toISOString() })
       .run();
 
     const client = new FixturePortalClient({
@@ -89,11 +89,42 @@ describe('ingest walker against fixtures (no network)', () => {
 
     const result = await syncCounty(db, client, 'LONG');
 
-    // All records in page1 have lastInspectionDate <= watermark -> stop after page 1,
+    // All records in page1 have lastInspectionDate < watermark -> stop after page 1,
     // and since nothing is new/changed, no inspection history fetch should occur
     // for facilities whose score/date did not change from what's already stored.
     expect(result.pagesWalked).toBe(1);
     expect(client.searchCalls.length).toBe(1);
+  });
+
+  it('keeps walking past a page whose newest records fall on the watermark day', async () => {
+    const { db } = createDb(':memory:');
+    db.insert(syncState)
+      .values({ county: 'LONG', watermark: '2026-08-07', lastSyncedAt: new Date().toISOString() })
+      .run();
+    const sameDay = { ...page1[0], id: 'U0FNRURBWQ==', name: 'Posted later the same day' };
+    const client = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: page1, 2: [sameDay], 3: [] } },
+      inspectionsByFacility: {},
+    });
+
+    const result = await syncCounty(db, client, 'LONG');
+
+    expect(client.searchCalls.map((c) => c.page)).toEqual([1, 2, 3]);
+    expect(result.pagesWalked).toBe(2);
+    expect(db.select().from(facilities).where(eq(facilities.id, 'U0FNRURBWQ==')).get()).toBeDefined();
+  });
+
+  it('throws without advancing the watermark when maxPages is hit before the end', async () => {
+    const { db } = createDb(':memory:');
+    const client = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: page1, 2: page1, 3: [] } },
+      inspectionsByFacility: {},
+    });
+
+    await expect(syncCounty(db, client, 'LONG', { maxPages: 1 })).rejects.toThrow(/maxPages=1/);
+    expect(db.select().from(syncState).where(eq(syncState.county, 'LONG')).get()).toBeUndefined();
+    // Facilities walked so far are still kept.
+    expect(db.select().from(facilities).all().length).toBe(page1.length);
   });
 
   it('respects the portal client rate limiter (serializes calls, does not burst)', async () => {
