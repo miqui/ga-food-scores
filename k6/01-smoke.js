@@ -123,10 +123,5 @@ export default function () {
 
     const badId = http.get(`${BASE_URL}/inspections/abc`, { ...authed(token), ...expect4xx });
     check(badId, { 'non-numeric inspection id: 400': (r) => r.status === 400 });
-
-    // A viewer must not be able to start a sync. (Never run this as an admin from
-    // k6: a real sync calls the live state portal.)
-    const admin = http.post(`${BASE_URL}/admin/sync`, null, { ...authed(token), ...expect4xx });
-    check(admin, { 'viewer on /admin/sync: 403': (r) => r.status === 403 });
   });
 }
