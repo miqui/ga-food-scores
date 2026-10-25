@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { eq, and, gte, like, sql } from 'drizzle-orm';
 import { facilities, inspections, violations } from '../db/schema.js';
 import type { AppDb } from '../db/client.js';
-import { COASTAL_COUNTIES } from '../ingest/counties.js';
+import { GA_COUNTIES } from '../ingest/counties.js';
 
 const PAGE_SIZE = 20;
 
@@ -10,7 +10,7 @@ export function facilitiesRoutes(getDb: () => AppDb) {
   const app = new Hono();
 
   app.get('/counties', (c) => {
-    return c.json({ counties: COASTAL_COUNTIES });
+    return c.json({ counties: GA_COUNTIES });
   });
 
   app.get('/facilities', (c) => {
@@ -81,12 +81,16 @@ export function facilitiesRoutes(getDb: () => AppDb) {
     const db = getDb();
     const id = Number.parseInt(c.req.param('id'), 10);
     if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
-    const inspection = db.select().from(inspections).where(eq(inspections.id, id)).get();
+    const inspection = db
+      .select()
+      .from(inspections)
+      .where(eq(inspections.inspectionId, id))
+      .get();
     if (!inspection) return c.json({ error: 'not found' }, 404);
     const violationRows = db
       .select()
       .from(violations)
-      .where(eq(violations.inspectionId, id))
+      .where(eq(violations.inspectionId, inspection.id))
       .all();
     return c.json({ ...inspection, violations: violationRows });
   });

@@ -7,5 +7,5 @@ const dbPath = process.env.DB_PATH ?? './data/app.db';
 const { app } = buildApp(dbPath);
 
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`ga-coastal-food-scores listening on http://localhost:${info.port}`);
+  console.log(`ga-food-scores listening on http://localhost:${info.port}`);
 });
