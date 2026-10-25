@@ -210,3 +210,13 @@ curl -s -X POST http://localhost:3344/admin/sync -H "Authorization: Bearer <admi
 
 (Admin role is assigned directly in the `users` table; there is no self-service
 promotion endpoint by design.)
+
+## Load testing with k6
+
+`k6/` has k6 scripts that test the API and double as a k6 tutorial: a smoke test of
+every endpoint, a load test with latency targets, and a stress test. See
+[`k6/README.md`](k6/README.md) for setup, how to run them, and how to read the results.
+
+```bash
+k6 run k6/01-smoke.js   # needs the server running on :3344 with synced data
+```
