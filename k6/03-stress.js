@@ -12,7 +12,9 @@
 //   - abortOnFail: stop the test early once a threshold is clearly broken
 //   - exec:        point a scenario at a named function instead of `default`
 //   - dropped_iterations: k6 reports this when it couldn't start iterations on time
-//                  (not enough VUs) — a sign the server, or k6 itself, is saturated
+//                  (not enough VUs) — a sign the server, or k6 itself, is saturated.
+//                  It has a threshold below, so a run that couldn't generate its
+//                  target load fails instead of passing quietly.
 //
 // A stress test answers "where does it break, and how does it fail?"
 // Run it against your local server, never against a shared or production one.
@@ -59,6 +61,12 @@ export const options = {
     // Report (but don't abort on) latency per scenario: k6 tags each request with it.
     'http_req_duration{scenario:reads}': ['p(95)<500'],
     'http_req_duration{scenario:logins}': ['p(95)<1000'],
+    // A wrong response (e.g. 204 instead of 200) fails a check but isn't an HTTP
+    // failure, so checks need their own threshold to affect the result.
+    checks: ['rate>0.99'],
+    // Iterations k6 couldn't start because no VU was free. A few during ramps are
+    // normal; more means the test didn't generate the load it claims, so fail.
+    dropped_iterations: ['count<100'],
   },
 };
 

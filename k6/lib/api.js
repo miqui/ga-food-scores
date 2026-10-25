@@ -81,6 +81,12 @@ export function discoverTestData(token) {
     );
     for (const insp of (res.json('inspections') || []).slice(0, 3)) inspectionIds.push(insp.inspectionId);
   }
+  if (inspectionIds.length === 0) {
+    fail(
+      `no inspections found for the first ${Math.min(facilityIds.length, 10)} facilities in ` +
+        `COUNTIES=${COUNTIES.join(',')}. Sync counties with inspection history or pass -e COUNTIES=...`,
+    );
+  }
   return { facilityIds, inspectionIds };
 }
 

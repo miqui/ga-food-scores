@@ -50,12 +50,16 @@ Settings, passed with `-e NAME=value`:
 Useful flags:
 
 - `--quiet` hides the progress bar.
-- `--vus 5 --duration 30s` overrides a script's own load settings for a quick try.
+- `--vus 5 --duration 30s` overrides a script's own load settings for a quick try of
+  `01-smoke.js` or `02-load.js`. It doesn't work for `03-stress.js`: those flags replace
+  its named scenarios, and it has no default function to run. For a lighter stress
+  run, lower the rate instead: `k6 run -e MAX_RPS=50 -e LOGIN_RPS=1 k6/03-stress.js`.
 - `--summary-export=summary.json` saves the end-of-test numbers as JSON.
 - `K6_WEB_DASHBOARD=true k6 run ...` opens a live dashboard at http://localhost:5665.
 
-**Never point these at a shared or production server**, and never run them as an admin
-user: `POST /admin/sync` starts a real sync against the state portal.
+**Never point these at a shared or production server.** The scripts never call
+`POST /admin/sync`, because with an admin account it would start a real sync against
+the state portal; keep it that way if you add scripts.
 
 ## 3. Read the results
 
@@ -105,7 +109,7 @@ k6 prints a summary at the end. The lines that matter most:
 
 Measured locally on 2026-10-24 (Apple Silicon laptop, about 3,000 facilities):
 
-- **Smoke:** all 24 checks pass.
+- **Smoke:** all checks pass.
 - **Load:** 20 users, ~1,100 requests, 0 failures; p95 about 3 ms, far under the
   200 ms target.
 - **Stress at 500 req/s:** reads p95 under 1 ms; logins p95 about 36 ms. Login is

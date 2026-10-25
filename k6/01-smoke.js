@@ -107,7 +107,7 @@ export default function () {
   // Error cases are part of the contract too. These responses are 4xx on purpose,
   // so mark them as expected; otherwise they'd show up in http_req_failed.
   group('error cases', () => {
-    const expect4xx = { responseCallback: http.expectedStatuses(400, 401, 403, 404) };
+    const expect4xx = { responseCallback: http.expectedStatuses(400, 401, 404) };
 
     const noToken = http.get(`${BASE_URL}/facilities`, expect4xx);
     check(noToken, { 'no token: 401': (r) => r.status === 401 });
@@ -123,5 +123,9 @@ export default function () {
 
     const badId = http.get(`${BASE_URL}/inspections/abc`, { ...authed(token), ...expect4xx });
     check(badId, { 'non-numeric inspection id: 400': (r) => r.status === 400 });
+
+    // POST /admin/sync is deliberately not called: if K6_EMAIL is an admin account,
+    // it would start a real sync against the live state portal. Role checks are
+    // covered by the unit tests instead (test/unit/role-revocation.test.ts).
   });
 }
