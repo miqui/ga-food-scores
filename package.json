@@ -10,9 +10,9 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "build": "tsc",
+    "build": "node node_modules/typescript-7/bin/tsc",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "test": "vitest run",
     "sync": "tsx src/ingest/cli.ts"
   },
@@ -31,7 +31,8 @@
     "drizzle-kit": "^0.31.11",
     "eslint": "^9.15.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
+    "typescript": "^6.0.3",
+    "typescript-7": "npm:typescript@^7.0.2",
     "vitest": "^5.0.3"
   },
   "allowScripts": {
