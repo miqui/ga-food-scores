@@ -239,7 +239,7 @@ dependency, which resolves to the top-level package.
 Developer notes:
 
 - **TypeScript 7 is the source of truth for type errors.** Use `npm run typecheck`
-  (or `npm run build`) before pushing. Don't rely on `npx tsc`: `node_modules/.bin/tsc`
+  before pushing. Don't rely on `npx tsc`: `node_modules/.bin/tsc`
   points at 6.0.x.
 - To run the TS 7 compiler with other flags, call it directly:
   `node node_modules/typescript-7/bin/tsc --noEmit --watch`.
