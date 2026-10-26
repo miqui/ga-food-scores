@@ -20,7 +20,7 @@ describe('auth', () => {
       body: JSON.stringify({ email: 'a@example.com', password: 'password123', role: 'admin' }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.role).toBe('viewer');
   });
 
@@ -59,7 +59,7 @@ describe('auth', () => {
       body: JSON.stringify({ email: 'login@example.com', password: 'password123' }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(typeof body.access_token).toBe('string');
     expect(body.token_type).toBe('Bearer');
   });
@@ -101,7 +101,7 @@ describe('auth', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'viewer@example.com', password: 'password123' }),
     });
-    const { access_token } = await loginRes.json();
+    const { access_token } = (await loginRes.json()) as any;
     const res = await app.request('/admin/sync', {
       method: 'POST',
       headers: { Authorization: `Bearer ${access_token}` },

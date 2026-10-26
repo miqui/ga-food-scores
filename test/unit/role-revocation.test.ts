@@ -22,7 +22,7 @@ describe('role resolution is revocation-safe (DB, not JWT claims)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'promote@example.com', password: 'password123' }),
     });
-    const { access_token: token } = await loginRes.json();
+    const { access_token: token } = (await loginRes.json()) as any;
 
     // Still viewer -> admin route forbidden.
     const forbidden = await app.request('/admin/sync', {
@@ -62,7 +62,7 @@ describe('role resolution is revocation-safe (DB, not JWT claims)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'deleteme@example.com', password: 'password123' }),
     });
-    const { access_token: token } = await loginRes.json();
+    const { access_token: token } = (await loginRes.json()) as any;
 
     db.delete(users).where(eq(users.email, 'deleteme@example.com')).run();
 
