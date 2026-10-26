@@ -19,7 +19,7 @@ async function authedApp() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: 'reader@example.com', password: 'password123' }),
   });
-  const { access_token: token } = await loginRes.json();
+  const { access_token: token } = (await loginRes.json()) as any;
   return { app, db, token };
 }
 
@@ -49,27 +49,27 @@ describe('facilities API', () => {
 
     const countyRes = await app.request('/facilities?county=chatham', { headers });
     expect(countyRes.status).toBe(200);
-    const countyBody = await countyRes.json();
+    const countyBody = (await countyRes.json()) as any;
     expect(countyBody.total).toBe(20);
 
     const cityRes = await app.request('/facilities?city=SAVANNAH', { headers });
-    const cityBody = await cityRes.json();
+    const cityBody = (await cityRes.json()) as any;
     expect(cityBody.total).toBe(15);
 
     const scoreRes = await app.request('/facilities?min_score=100', { headers });
-    const scoreBody = await scoreRes.json();
+    const scoreBody = (await scoreRes.json()) as any;
     expect(scoreBody.total).toBe(5); // scores 100..104 (i=20..24)
 
     const qRes = await app.request('/facilities?q=Pizza', { headers });
-    const qBody = await qRes.json();
+    const qBody = (await qRes.json()) as any;
     expect(qBody.total).toBe(13); // even i in 0..24 inclusive -> 13
 
     const page1 = await app.request('/facilities?page=1', { headers });
-    const page1Body = await page1.json();
+    const page1Body = (await page1.json()) as any;
     expect(page1Body.results.length).toBe(20);
 
     const page2 = await app.request('/facilities?page=2', { headers });
-    const page2Body = await page2.json();
+    const page2Body = (await page2.json()) as any;
     expect(page2Body.results.length).toBe(5);
   });
 
@@ -114,7 +114,7 @@ describe('facilities API', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.inspections.length).toBe(1);
 
     const notFound = await app.request('/facilities/nope/inspections', {
@@ -169,7 +169,7 @@ describe('facilities API', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.violations.length).toBe(1);
     expect(body.violations[0].code).toBe('1-2B');
 
@@ -188,7 +188,7 @@ describe('facilities API', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(countiesRes.status).toBe(200);
-    const body = await countiesRes.json();
+    const body = (await countiesRes.json()) as any;
     expect(body.counties).toContain('CHATHAM');
   });
 });

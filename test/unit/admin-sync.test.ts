@@ -33,7 +33,7 @@ async function adminApp(makeClient: () => PortalClient) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
   });
-  const { access_token } = await loginRes.json();
+  const { access_token } = (await loginRes.json()) as any;
   const post = (body?: unknown) =>
     app.request('/admin/sync', {
       method: 'POST',
@@ -56,7 +56,7 @@ describe('POST /admin/sync', () => {
     const { post } = await adminApp(() => client);
     const res = await post({ county: 'ben hill' });
     expect(res.status).toBe(202);
-    expect((await res.json()).counties).toEqual(['BEN HILL']);
+    expect(((await res.json()) as any).counties).toEqual(['BEN HILL']);
     release();
   });
 
@@ -66,7 +66,7 @@ describe('POST /admin/sync', () => {
     expect((await post({ county: 'LONG' })).status).toBe(202);
     const busy = await post({ county: 'BRYAN' });
     expect(busy.status).toBe(409);
-    expect((await busy.json()).counties).toEqual(['LONG']);
+    expect(((await busy.json()) as any).counties).toEqual(['LONG']);
 
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));

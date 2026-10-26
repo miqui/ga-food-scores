@@ -228,7 +228,7 @@ Two TypeScript versions are installed on purpose:
 | Package (devDependencies) | Version | Used by |
 |---|---|---|
 | `typescript-7` (alias of `typescript@^7.0.2`) | 7.0.x | `npm run build`, `npm run typecheck` |
-| `typescript` | 6.0.x | `npm run lint` (typescript-eslint), editors, plain `npx tsc` |
+| `typescript` (pinned `~6.0.3`) | 6.0.x | `npm run lint` (typescript-eslint), editors, plain `npx tsc` |
 
 Why: TypeScript 7 no longer ships the JavaScript compiler API (`require('typescript')`
 only returns a version stub). typescript-eslint is built on that API and supports only
@@ -239,7 +239,7 @@ dependency, which resolves to the top-level package.
 Developer notes:
 
 - **TypeScript 7 is the source of truth for type errors.** Use `npm run typecheck`
-  (or `npm run build`) before pushing. Don't rely on `npx tsc`: `node_modules/.bin/tsc`
+  before pushing. Don't rely on `npx tsc`: `node_modules/.bin/tsc`
   points at 6.0.x.
 - To run the TS 7 compiler with other flags, call it directly:
   `node node_modules/typescript-7/bin/tsc --noEmit --watch`.
@@ -248,8 +248,11 @@ Developer notes:
   diagnostics can occasionally differ from TS 7; when they do, trust `npm run typecheck`.
 - `npm run dev`, `npm run sync` and `npm test` don't use either version for checking:
   `tsx` and Vitest strip types with esbuild. A type error won't stop them from running.
-- Keep `tsconfig.json` valid for both versions (6.x for the editor and lint, 7.x for
-  the build).
+- `npm run typecheck` uses `tsconfig.json`, which covers `src/`, `test/` and
+  `vitest.config.ts`. `npm run build` uses `tsconfig.build.json`, which emits only `src/`
+  to `dist/`.
+- Keep `tsconfig.json` and `tsconfig.build.json` valid for both versions (6.x for the
+  editor and lint, 7.x for the build).
 - **When typescript-eslint supports TypeScript 7:** set `typescript` to `^7`, remove the
-  `typescript-7` alias, change `build`/`typecheck` back to plain `tsc`, run
-  `npm install`, and delete this section.
+  `typescript-7` alias, change `build` to `tsc -p tsconfig.build.json` and
+  `typecheck` to `tsc --noEmit`, run `npm install`, and delete this section.
