@@ -163,3 +163,61 @@ describe('ingest walker against fixtures (no network)', () => {
     expect(vios[0].code).toContain('1-2B');
   });
 });
+
+describe('CLAY search also returning CLAYTON facilities', () => {
+  // The portal's county search is a substring match, so "CLAY" returns CLAYTON too.
+  const record = (id: string, address: string, date: string) => ({
+    ...page1[0],
+    id,
+    mapAddress: address,
+    columns: { ...page1[0].columns, '5': `Last Inspection Date: ${date}` },
+  });
+  const clay = record('Q0xBWQ==', '105 S HANCOCK ST \r\nFORT GAINES, GA 39851', '09-09-2026');
+  const clayton = record('Q0xBWVRPTg==', '1 MAIN ST \r\nJONESBORO, GA 30236', '10-20-2026');
+
+  it('skips CLAYTON records and keeps them out of the CLAY watermark', async () => {
+    const { db } = createDb(':memory:');
+    const client = new FixturePortalClient({
+      pagesByCounty: { CLAY: { 1: [clayton, clay], 2: [] } },
+      inspectionsByFacility: {},
+    });
+
+    const result = await syncCounty(db, client, 'CLAY');
+
+    expect(result.facilitiesSeen).toBe(2);
+    expect(result.facilitiesSkipped).toBe(1);
+    expect(result.newWatermark).toBe('2026-09-09');
+    expect(db.select().from(facilities).all().map((f) => f.id)).toEqual([clay.id]);
+    expect(client.inspectionCalls).toEqual([clay.id]);
+  });
+
+  it('does not relabel CLAYTON facilities when CLAY is synced after CLAYTON', async () => {
+    const { db } = createDb(':memory:');
+    const client = new FixturePortalClient({
+      pagesByCounty: { CLAYTON: { 1: [clayton], 2: [] }, CLAY: { 1: [clayton, clay], 2: [] } },
+      inspectionsByFacility: {},
+    });
+
+    await syncCounty(db, client, 'CLAYTON');
+    await syncCounty(db, client, 'CLAY');
+
+    expect(db.select().from(facilities).where(eq(facilities.id, clayton.id)).get()?.county).toBe('CLAYTON');
+  });
+
+  it('keeps walking past a page of new CLAYTON-only records', async () => {
+    const { db } = createDb(':memory:');
+    db.insert(syncState)
+      .values({ county: 'CLAY', watermark: '2026-09-01', lastSyncedAt: new Date().toISOString() })
+      .run();
+    const client = new FixturePortalClient({
+      pagesByCounty: { CLAY: { 1: [clayton], 2: [clay], 3: [] } },
+      inspectionsByFacility: {},
+    });
+
+    const result = await syncCounty(db, client, 'CLAY');
+
+    expect(client.searchCalls.map((c) => c.page)).toEqual([1, 2, 3]);
+    expect(db.select().from(facilities).where(eq(facilities.id, clay.id)).get()).toBeDefined();
+    expect(result.newWatermark).toBe('2026-09-09');
+  });
+});
