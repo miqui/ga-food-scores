@@ -41,10 +41,24 @@ function parseFacilityRecord(county: string, raw: PortalFacilityRecord) {
   };
 }
 
+/**
+ * The portal's county search is a substring match and its records carry no
+ * county field, so searching CLAY also returns every CLAYTON facility (the
+ * only such overlap among GA county names). Clay County ZIPs all start with
+ * 398 and Clayton's with 30, so drop CLAY results with a non-398 ZIP. Records
+ * without a parseable ZIP are kept.
+ */
+function belongsToSearchedCounty(county: string, address: string): boolean {
+  if (county !== 'CLAY') return true;
+  const zip = address.match(/\bGA\s+(\d{5})/i)?.[1];
+  return !zip || zip.startsWith('398');
+}
+
 export interface SyncResult {
   county: string;
   pagesWalked: number;
   facilitiesSeen: number;
+  facilitiesSkipped: number;
   facilitiesUpserted: number;
   facilitiesWithNewInspections: number;
   inspectionsUpserted: number;
@@ -79,6 +93,7 @@ export async function syncCounty(
   let page = 1;
   let pagesWalked = 0;
   let facilitiesSeen = 0;
+  let facilitiesSkipped = 0;
   let facilitiesUpserted = 0;
   let facilitiesWithNewInspections = 0;
   let inspectionsUpserted = 0;
@@ -100,14 +115,23 @@ export async function syncCounty(
     for (const raw of records) {
       facilitiesSeen += 1;
       const parsed = parseFacilityRecord(county, raw);
-      if (!newestDateSeen || (parsed.lastInspectionDate && parsed.lastInspectionDate > newestDateSeen)) {
-        newestDateSeen = parsed.lastInspectionDate || newestDateSeen;
-      }
 
+      // Skipped records still count toward the stop check: results are sorted by
+      // date across both counties, so a page of new foreign records can sit in
+      // front of new records that do belong to this county.
       const belowWatermark =
         !!watermark && !!parsed.lastInspectionDate && parsed.lastInspectionDate < watermark;
       if (!belowWatermark) {
         allBelowWatermark = false;
+      }
+
+      if (!belongsToSearchedCounty(county, parsed.address)) {
+        facilitiesSkipped += 1;
+        continue;
+      }
+
+      if (!newestDateSeen || (parsed.lastInspectionDate && parsed.lastInspectionDate > newestDateSeen)) {
+        newestDateSeen = parsed.lastInspectionDate || newestDateSeen;
       }
 
       const existing = db.select().from(facilities).where(eq(facilities.id, parsed.id)).get();
@@ -208,6 +232,7 @@ export async function syncCounty(
     county,
     pagesWalked,
     facilitiesSeen,
+    facilitiesSkipped,
     facilitiesUpserted,
     facilitiesWithNewInspections,
     inspectionsUpserted,
