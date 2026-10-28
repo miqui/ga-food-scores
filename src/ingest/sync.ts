@@ -257,7 +257,13 @@ export async function syncCounty(
     .all()
     .filter((f) => !fetchedThisRun.has(f.id));
   for (const f of pending) {
-    const history = await client.getInspections(f.id);
+    let history: PortalInspectionRecord[];
+    try {
+      history = await client.getInspections(f.id);
+    } catch (err) {
+      console.error(`[sync] county=${county} facility=${f.id} history retry failed:`, err);
+      continue;
+    }
     const saved = db.transaction((tx) => {
       tx.update(facilities)
         .set({ historyPending: !historyIsComplete(f.lastInspectionDate, history) })
