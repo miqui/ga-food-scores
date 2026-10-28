@@ -50,6 +50,7 @@ results and upserts facilities/inspections/violations, usable both as a CLI
 | GET    | `/facilities/:id/inspections`| JWT           | inspection history for a facility        |
 | GET    | `/inspections/:id`           | JWT           | one inspection + its violations; `:id` is the portal `inspectionId` |
 | POST   | `/admin/sync`                | JWT + admin   | triggers an async ingest run, returns 202 |
+| GET    | `/admin/sync`                | JWT + admin   | the running sync (if any) and the last 50 per-county runs |
 
 Auth: send `Authorization: Bearer <token>` from `/auth/login`. `401` = missing/invalid/expired
 token; `403` = valid token but insufficient role. Role is re-resolved from the `users`
@@ -88,10 +89,22 @@ Notes:
 - Re-running is safe: records are upserted, and a per-county watermark is kept in
   `sync_state`.
 - `SYNC_COUNTIES` (comma-separated) limits a run with no county arguments. Unknown
-  county names are rejected.
+  county names are rejected. Named counties run in the order given; a run with no
+  arguments goes stalest first (never-synced and unfinished counties, then the
+  oldest `last_synced_at`), so a run that's stopped early picks up where it left off.
 - A full statewide first load is long: the portal is fetched at 1 request/second, and
   Fulton alone is ~1,700 search pages plus one request per facility (~3 hours).
-  Later runs only walk until they reach pages older than the watermark.
+  Later runs only walk until they reach pages more than 30 days older than the
+  watermark. A walk saves a checkpoint after every page, so an interrupted or failed
+  county resumes near where it stopped instead of at page 1.
+- Ctrl-C (or SIGTERM) stops after the current facility, records the county as
+  interrupted and exits with code 130; press it again to exit at once. Either way,
+  each facility is saved all-or-nothing.
+- Only one sync runs at a time per database, whether started from the CLI or
+  `POST /admin/sync`; a second one is refused. A lock left by a crashed process
+  expires after 2 minutes.
+- Each county's outcome is recorded in the `sync_runs` table (and shown by
+  `GET /admin/sync`).
 - A county that fails is logged and skipped; the run continues and exits non-zero
   with the list of failed counties.
 - Use the same `DB_PATH` for the server (`npm run dev`) and the sync.
@@ -205,7 +218,9 @@ curl -s -X POST http://localhost:3344/admin/sync -H "Authorization: Bearer <admi
 # -> 202 {"status":"accepted","counties":[...]}   (SYNC_COUNTIES, or all 159)
 curl -s -X POST http://localhost:3344/admin/sync -H "Authorization: Bearer <admin JWT>" \
   -H 'Content-Type: application/json' -d '{"county":"BEN HILL"}'
-# -> 400 for an unknown county; 409 while another sync is still running
+# -> 400 for an unknown county; 409 while another sync (CLI or API) is still running
+curl -s http://localhost:3344/admin/sync -H "Authorization: Bearer <admin JWT>"
+# -> {"running":{"owner":"...","counties":[...],...} | null, "runs":[{"county":"LONG","status":"ok",...}]}
 ```
 
 (Admin role is assigned directly in the `users` table; there is no self-service

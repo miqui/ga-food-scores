@@ -72,12 +72,40 @@ function migrate(sqlite: Database.Database) {
     CREATE TABLE IF NOT EXISTS sync_state (
       county TEXT PRIMARY KEY,
       watermark TEXT,
-      last_synced_at TEXT
+      last_synced_at TEXT,
+      resume_page INTEGER,
+      resume_newest TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS sync_lock (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      owner TEXT NOT NULL,
+      counties TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      heartbeat_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      county TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL,
+      result TEXT,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS sync_runs_started_idx ON sync_runs(started_at);
   `);
 
-  const facilityColumns = sqlite.prepare('PRAGMA table_info(facilities)').all() as { name: string }[];
-  if (!facilityColumns.some((c) => c.name === 'history_pending')) {
+  if (!hasColumn(sqlite, 'sync_state', 'resume_page')) {
+    sqlite.exec(`
+      ALTER TABLE sync_state ADD COLUMN resume_page INTEGER;
+      ALTER TABLE sync_state ADD COLUMN resume_newest TEXT;
+    `);
+  }
+
+  if (!hasColumn(sqlite, 'facilities', 'history_pending')) {
     // One-time upgrade of a DB from before history_pending. Older syncs saved
     // the portal's "No Inspections To Display" placeholder as an inspection, and
     // could mark a facility current before its history was saved, so drop the
@@ -98,6 +126,11 @@ function migrate(sqlite: Database.Database) {
       `);
     })();
   }
+}
+
+function hasColumn(sqlite: Database.Database, table: string, column: string): boolean {
+  const columns = sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return columns.some((c) => c.name === column);
 }
 
 export type AppDb = ReturnType<typeof createDb>['db'];

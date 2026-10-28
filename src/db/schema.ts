@@ -77,4 +77,35 @@ export const syncState = sqliteTable('sync_state', {
   county: text('county').primaryKey(),
   watermark: text('watermark'), // ISO yyyy-mm-dd of the most recent inspection date seen
   lastSyncedAt: text('last_synced_at'),
+  // Checkpoint of an unfinished walk: the next page to fetch, and the newest
+  // date seen on the pages already walked. Both null once a walk completes.
+  resumePage: integer('resume_page'),
+  resumeNewest: text('resume_newest'),
 });
+
+/** At most one row (id 1): the process currently running a sync, kept fresh by heartbeats. */
+export const syncLock = sqliteTable('sync_lock', {
+  id: integer('id').primaryKey(),
+  owner: text('owner').notNull(),
+  counties: text('counties').notNull(), // JSON array
+  acquiredAt: text('acquired_at').notNull(),
+  heartbeatAt: text('heartbeat_at').notNull(),
+});
+
+/** One row per county per sync run. */
+export const syncRuns = sqliteTable(
+  'sync_runs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    county: text('county').notNull(),
+    owner: text('owner').notNull(),
+    startedAt: text('started_at').notNull(),
+    finishedAt: text('finished_at'),
+    status: text('status', { enum: ['running', 'ok', 'failed', 'interrupted'] }).notNull(),
+    result: text('result'), // JSON SyncResult when status is ok
+    error: text('error'),
+  },
+  (t) => ({
+    startedIdx: index('sync_runs_started_idx').on(t.startedAt),
+  }),
+);
