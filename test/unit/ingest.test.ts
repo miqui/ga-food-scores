@@ -87,13 +87,40 @@ describe('ingest walker against fixtures (no network)', () => {
       inspectionsByFacility: {},
     });
 
-    const result = await syncCounty(db, client, 'LONG');
+    const result = await syncCounty(db, client, 'LONG', { lookbackDays: 0 });
 
     // All records in page1 have lastInspectionDate < watermark -> stop after page 1,
     // and since nothing is new/changed, no inspection history fetch should occur
     // for facilities whose score/date did not change from what's already stored.
     expect(result.pagesWalked).toBe(1);
     expect(client.searchCalls.length).toBe(1);
+  });
+
+  it('keeps walking through the lookback window behind the watermark', async () => {
+    const { db } = createDb(':memory:');
+    // page1 is dated 06-29..08-07; a 30-day lookback from 08-08 stops before 07-09.
+    db.insert(syncState)
+      .values({ county: 'LONG', watermark: '2026-08-08', lastSyncedAt: new Date().toISOString() })
+      .run();
+    const postedLate = {
+      ...page1[0],
+      id: 'TEFURQ==',
+      columns: { ...page1[0].columns, '5': 'Last Inspection Date: 07-20-2026' },
+    };
+    const old = {
+      ...page1[0],
+      id: 'T0xE',
+      columns: { ...page1[0].columns, '5': 'Last Inspection Date: 05-01-2026' },
+    };
+    const client = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: page1, 2: [postedLate], 3: [old], 4: [] } },
+      inspectionsByFacility: {},
+    });
+
+    await syncCounty(db, client, 'LONG');
+
+    expect(client.searchCalls.map((c) => c.page)).toEqual([1, 2, 3]);
+    expect(db.select().from(facilities).where(eq(facilities.id, 'TEFURQ==')).get()).toBeDefined();
   });
 
   it('keeps walking past a page whose newest records fall on the watermark day', async () => {

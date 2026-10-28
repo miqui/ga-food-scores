@@ -126,11 +126,27 @@ function saveHistory(tx: Tx, facilityId: string, history: PortalInspectionRecord
 export const DEFAULT_MAX_PAGES = 10_000;
 
 /**
+ * How far behind the watermark an incremental walk keeps going. Inspections are
+ * often posted days after their inspection date, which sorts them below the
+ * watermark of a run that happened in between; walking this far back picks
+ * them up. Facilities whose listing is unchanged cost only the search page.
+ */
+export const DEFAULT_LOOKBACK_DAYS = 30;
+
+function daysBefore(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
  * Walk a single county's paginated search results newest-inspection-first,
  * upsert facility rows, and stop as soon as we see a page whose records are
- * all strictly older than the stored watermark (nothing new left to find).
- * Records dated on the watermark day itself don't stop the walk, since more
- * inspections for that day may have been posted after the last sync.
+ * all strictly older than the stored watermark minus lookbackDays (nothing
+ * new left to find). The lookback catches inspections posted late; with a
+ * lookback of 0, records dated on the watermark day itself still don't stop
+ * the walk, since more inspections for that day may have been posted after
+ * the last sync.
  * If maxPages is hit before the results run out, the run throws without
  * advancing the watermark, so the next run starts over instead of skipping
  * the unwalked tail.
@@ -146,10 +162,11 @@ export async function syncCounty(
   db: AppDb,
   client: PortalClient,
   county: string,
-  options: { maxPages?: number } = {},
+  options: { maxPages?: number; lookbackDays?: number } = {},
 ): Promise<SyncResult> {
   const stateRow = db.select().from(syncState).where(eq(syncState.county, county)).get();
   const watermark = stateRow?.watermark ?? null;
+  const stopBefore = watermark ? daysBefore(watermark, options.lookbackDays ?? DEFAULT_LOOKBACK_DAYS) : null;
 
   let page = 1;
   let pagesWalked = 0;
@@ -183,7 +200,7 @@ export async function syncCounty(
       // date across both counties, so a page of new foreign records can sit in
       // front of new records that do belong to this county.
       const belowWatermark =
-        !!watermark && !!parsed.lastInspectionDate && parsed.lastInspectionDate < watermark;
+        !!stopBefore && !!parsed.lastInspectionDate && parsed.lastInspectionDate < stopBefore;
       if (!belowWatermark) {
         allBelowWatermark = false;
       }
@@ -227,7 +244,7 @@ export async function syncCounty(
       violationsUpserted += saved.violationsUpserted;
     }
 
-    if (watermark && allBelowWatermark) {
+    if (stopBefore && allBelowWatermark) {
       reachedEnd = true;
       break;
     }

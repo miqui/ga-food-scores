@@ -23,33 +23,71 @@ class RateLimiter {
   }
 }
 
-async function fetchJsonWithRetry(
-  url: string,
-  limiter: RateLimiter,
-  maxAttempts = 4,
-): Promise<unknown> {
-  let attempt = 0;
+export interface RetryOptions {
+  /** Total tries per request, including the first. */
+  maxAttempts: number;
+  /** First backoff delay; doubles per retry, with jitter, up to maxDelayMs. */
+  baseDelayMs: number;
+  maxDelayMs: number;
+  /** Abort a request that hasn't produced a response body by then. */
+  timeoutMs: number;
+}
+
+// About 2 minutes of backoff in total, so a short portal outage doesn't fail a
+// county walk that may be hundreds of pages in.
+const DEFAULT_RETRY: RetryOptions = { maxAttempts: 6, baseDelayMs: 2000, maxDelayMs: 60_000, timeoutMs: 30_000 };
+
+/** Longest Retry-After we'll honor; anything longer is capped. */
+const MAX_RETRY_AFTER_MS = 5 * 60_000;
+
+/** An error that retrying won't fix (a 4xx other than 429). */
+class PermanentPortalError extends Error {}
+
+function retryAfterMs(res: Response): number | null {
+  const header = res.headers.get('Retry-After');
+  if (!header) return null;
+  const seconds = Number(header);
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, MAX_RETRY_AFTER_MS) : null;
+}
+
+/**
+ * GET a portal URL that must return a JSON array. 5xx, 429, timeouts, network
+ * errors and bodies that aren't a JSON array are retried with exponential
+ * backoff; other 4xx fail at once. The portal answers an empty page or list
+ * with `[]`, never with another JSON shape, so anything else is an error and
+ * must not be read as "no results" (that would end a county walk early).
+ */
+async function fetchJsonArrayWithRetry(url: string, limiter: RateLimiter, retry: RetryOptions): Promise<unknown[]> {
   let lastError: unknown;
-  while (attempt < maxAttempts) {
+  for (let attempt = 1; attempt <= retry.maxAttempts; attempt++) {
     await limiter.wait();
+    let delayMs: number | null = null;
     try {
-      const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-      if (res.status >= 500) {
-        lastError = new Error(`portal 5xx: ${res.status} for ${url}`);
+      const res = await fetch(url, {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(retry.timeoutMs),
+      });
+      if (res.status === 429 || res.status >= 500) {
+        delayMs = retryAfterMs(res);
+        lastError = new Error(`portal ${res.status} for ${url}`);
       } else if (!res.ok) {
-        throw new Error(`portal error ${res.status} for ${url}`);
+        throw new PermanentPortalError(`portal error ${res.status} for ${url}`);
       } else {
-        return await res.json();
+        const data: unknown = await res.json();
+        if (Array.isArray(data)) return data;
+        lastError = new Error(`portal returned non-array JSON for ${url}: ${JSON.stringify(data).slice(0, 200)}`);
       }
     } catch (err) {
+      if (err instanceof PermanentPortalError) throw err;
       lastError = err;
     }
-    attempt += 1;
-    if (attempt < maxAttempts) {
-      await sleep(2 ** attempt * 250);
+    if (attempt < retry.maxAttempts) {
+      const backoff = Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** (attempt - 1));
+      await sleep(delayMs ?? backoff * (0.5 + Math.random() / 2));
     }
   }
-  throw lastError instanceof Error ? lastError : new Error('portal request failed');
+  throw lastError instanceof Error ? lastError : new Error(`portal request failed for ${url}`);
 }
 
 function parsePortalDate(value: string | undefined): string {
@@ -103,8 +141,20 @@ export function base64Encode(value: string): string {
   return Buffer.from(value, 'utf-8').toString('base64');
 }
 
+export interface LivePortalClientOptions {
+  /** Minimum gap between requests; the portal is shared, so keep this at 1s in production. */
+  minIntervalMs?: number;
+  retry?: Partial<RetryOptions>;
+}
+
 export class LivePortalClient implements PortalClient {
-  private readonly limiter = new RateLimiter(1000); // 1 request / second
+  private readonly limiter: RateLimiter;
+  private readonly retry: RetryOptions;
+
+  constructor(options: LivePortalClientOptions = {}) {
+    this.limiter = new RateLimiter(options.minIntervalMs ?? 1000); // 1 request / second
+    this.retry = { ...DEFAULT_RETRY, ...options.retry };
+  }
 
   async searchCounty(county: string, page: number): Promise<PortalFacilityRecord[]> {
     const query = JSON.stringify({
@@ -113,17 +163,14 @@ export class LivePortalClient implements PortalClient {
       city: '',
     });
     const url = `${BASE}/search/${encodeURIComponent(query)}/${page}`;
-    const data = (await fetchJsonWithRetry(url, this.limiter)) as PortalFacilityRecord[];
-    return Array.isArray(data) ? data : [];
+    return (await fetchJsonArrayWithRetry(url, this.limiter, this.retry)) as PortalFacilityRecord[];
   }
 
   async getInspections(facilityId: string): Promise<PortalInspectionRecord[]> {
     const url = `${BASE}/inspectionsData/${encodeURIComponent(facilityId)}`;
-    const data = (await fetchJsonWithRetry(url, this.limiter)) as any[];
+    const data = await fetchJsonArrayWithRetry(url, this.limiter, this.retry);
     // A facility with nothing posted yet comes back as one placeholder row
     // ("No Inspections To Display", inspectionId 0, no date); it's not an inspection.
-    return Array.isArray(data)
-      ? data.map(parseInspectionRecord).filter((r) => r.inspectionId > 0 && r.date !== '')
-      : [];
+    return data.map(parseInspectionRecord).filter((r) => r.inspectionId > 0 && r.date !== '');
   }
 }
