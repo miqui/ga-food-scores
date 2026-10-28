@@ -149,7 +149,9 @@ describe('ingest walker against fixtures (no network)', () => {
     });
 
     await expect(syncCounty(db, client, 'LONG', { maxPages: 1 })).rejects.toThrow(/maxPages=1/);
-    expect(db.select().from(syncState).where(eq(syncState.county, 'LONG')).get()).toBeUndefined();
+    const state = db.select().from(syncState).where(eq(syncState.county, 'LONG')).get();
+    expect(state?.watermark).toBeNull();
+    expect(state?.resumePage).toBe(2);
     // Facilities walked so far are still kept.
     expect(db.select().from(facilities).all().length).toBe(page1.length);
   });
@@ -411,5 +413,58 @@ describe('inspection history integrity', () => {
     });
     await syncCounty(db, client, 'LONG');
     expect(facility(db)?.historyPending).toBe(false);
+  });
+});
+
+describe('resuming and stopping a walk', () => {
+  // One facility per page, newest first: page n is dated 10-(20-n)-2026.
+  const pageRecord = (n: number) => ({
+    ...page1[0],
+    id: `UEFHRS${n}`,
+    columns: { ...page1[0].columns, '5': `Last Inspection Date: 10-${String(20 - n).padStart(2, '0')}-2026` },
+  });
+  const pages = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [n, [pageRecord(n)]]));
+
+  it('resumes an interrupted first walk near its checkpoint and keeps its newest date', async () => {
+    const { db } = createDb(':memory:');
+    const failing = new FixturePortalClient({ pagesByCounty: { LONG: { ...pages, 7: [] } }, inspectionsByFacility: {} });
+    const search = failing.searchCounty.bind(failing);
+    failing.searchCounty = async (county, page) => {
+      if (page === 6) throw new Error('portal down');
+      return search(county, page);
+    };
+    await expect(syncCounty(db, failing, 'LONG')).rejects.toThrow('portal down');
+    const checkpoint = db.select().from(syncState).where(eq(syncState.county, 'LONG')).get();
+    expect(checkpoint).toMatchObject({ watermark: null, resumePage: 6, resumeNewest: '2026-10-19' });
+
+    const client = new FixturePortalClient({ pagesByCounty: { LONG: { ...pages, 7: [] } }, inspectionsByFacility: {} });
+    const result = await syncCounty(db, client, 'LONG');
+
+    // Restarts 2 pages before the checkpoint, not at page 1.
+    expect(client.searchCalls.map((c) => c.page)).toEqual([4, 5, 6, 7]);
+    // The watermark still comes from page 1, walked by the first attempt.
+    expect(result.newWatermark).toBe('2026-10-19');
+    expect(db.select().from(syncState).where(eq(syncState.county, 'LONG')).get()).toMatchObject({
+      watermark: '2026-10-19',
+      resumePage: null,
+      resumeNewest: null,
+    });
+  });
+
+  it('stops between facilities when aborted, keeping the facilities already saved', async () => {
+    const { db } = createDb(':memory:');
+    const stop = new AbortController();
+    const client = new FixturePortalClient({ pagesByCounty: { LONG: { 1: page1, 2: [] } }, inspectionsByFacility: {} });
+    const getInspections = client.getInspections.bind(client);
+    client.getInspections = async (id) => {
+      const history = await getInspections(id);
+      stop.abort(new Error('stopped by SIGINT'));
+      return history;
+    };
+
+    await expect(syncCounty(db, client, 'LONG', { signal: stop.signal })).rejects.toThrow('stopped by SIGINT');
+    // The facility whose fetch was in flight is saved in full; nothing after it is.
+    expect(db.select().from(facilities).all().map((f) => f.id)).toEqual([page1[0].id]);
+    expect(db.select().from(syncState).where(eq(syncState.county, 'LONG')).get()?.watermark ?? null).toBeNull();
   });
 });

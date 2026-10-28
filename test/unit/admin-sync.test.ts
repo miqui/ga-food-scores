@@ -3,6 +3,7 @@ import { buildApp } from '../../src/app.js';
 import { users } from '../../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { PortalClient } from '../../src/ingest/portal-client.js';
+import { acquireSyncLock } from '../../src/ingest/run.js';
 
 process.env.JWT_SECRET = 'test-secret-for-vitest';
 
@@ -40,7 +41,8 @@ async function adminApp(makeClient: () => PortalClient) {
       headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { post };
+  const get = () => app.request('/admin/sync', { headers: { Authorization: `Bearer ${access_token}` } });
+  return { post, get, db };
 }
 
 describe('POST /admin/sync', () => {
@@ -71,5 +73,36 @@ describe('POST /admin/sync', () => {
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((await post({ county: 'BRYAN' })).status).toBe(202);
+  });
+
+  it('refuses with 409 while a CLI sync holds the lock on the same DB', async () => {
+    const { client } = blockingClient();
+    const { post, db } = await adminApp(() => client);
+    const cliLock = acquireSyncLock(db, ['TOWNS']);
+
+    const res = await post({ county: 'LONG' });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).counties).toEqual(['TOWNS']);
+
+    cliLock.release();
+    expect((await post({ county: 'LONG' })).status).toBe(202);
+  });
+});
+
+describe('GET /admin/sync', () => {
+  it('reports the running sync and the recorded runs', async () => {
+    const { client, release } = blockingClient();
+    const { post, get } = await adminApp(() => client);
+    expect((await post({ county: 'LONG' })).status).toBe(202);
+
+    const during = (await (await get()).json()) as any;
+    expect(during.running.counties).toEqual(['LONG']);
+    expect(during.runs.map((r: any) => [r.county, r.status])).toEqual([['LONG', 'running']]);
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = (await (await get()).json()) as any;
+    expect(after.running).toBeNull();
+    expect(after.runs.map((r: any) => [r.county, r.status])).toEqual([['LONG', 'ok']]);
   });
 });

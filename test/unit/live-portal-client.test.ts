@@ -89,3 +89,47 @@ describe('LivePortalClient.getInspections', () => {
     expect(history.map((h) => [h.inspectionId, h.date])).toEqual([[99522961, '2026-08-25']]);
   });
 });
+
+describe('LivePortalClient record validation', () => {
+  const facility = (id: string, date = '10-01-2026') => ({
+    id,
+    name: `Facility ${id}`,
+    mapAddress: '1 MAIN ST \r\nLUDOWICI, GA 31316',
+    columns: { '4': 'Last Inspection Score: 95', '5': `Last Inspection Date: ${date}` },
+  });
+
+  it('skips a stray malformed facility record and keeps the rest', async () => {
+    respondWith(json([facility('QQ=='), { name: 'no id' }, facility('Qg=='), facility('Qw=='), facility('RA==')]));
+    const records = await fastClient().searchCounty('LONG', 1);
+    expect(records.map((r) => r.id)).toEqual(['QQ==', 'Qg==', 'Qw==', 'RA==']);
+  });
+
+  it('fails the page, without retrying, when most records are malformed', async () => {
+    const fetchMock = respondWith(json([{ name: 'no id' }, { id: 5 }, facility('QQ==')]));
+    await expect(fastClient().searchCounty('LONG', 1)).rejects.toThrow(/2\/3 malformed records/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a changed date format as malformed instead of storing empty dates', async () => {
+    respondWith(json([facility('QQ==', '2026-10-01'), facility('Qg==', '2026-10-02')]));
+    await expect(fastClient().searchCounty('LONG', 1)).rejects.toThrow(/Last Inspection Date format/);
+  });
+
+  it('accepts never-inspected facilities whose date has no digits', async () => {
+    respondWith(json([facility('QQ==', 'NA')]));
+    expect(await fastClient().searchCounty('LONG', 1)).toHaveLength(1);
+  });
+
+  it('skips malformed inspections but keeps the valid ones', async () => {
+    const inspection = (inspectionId: unknown, date: string) => ({
+      printablePath: '',
+      inspectionId,
+      facilityId: 'QQ==',
+      columns: { '0': `Date: ${date}`, '2': 'Score: 90' },
+      violations: {},
+    });
+    respondWith(json([inspection(2, '10-01-2026'), inspection('x', '09-01-2026'), inspection(1, '2026/08/01')]));
+    const history = await fastClient().getInspections('QQ==');
+    expect(history.map((h) => h.inspectionId)).toEqual([2]);
+  });
+});
