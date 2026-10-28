@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createDb } from '../../src/db/client.js';
 import { syncCounty } from '../../src/ingest/sync.js';
@@ -219,5 +219,170 @@ describe('CLAY search also returning CLAYTON facilities', () => {
     expect(client.searchCalls.map((c) => c.page)).toEqual([1, 2, 3]);
     expect(db.select().from(facilities).where(eq(facilities.id, clay.id)).get()).toBeDefined();
     expect(result.newWatermark).toBe('2026-09-09');
+  });
+});
+
+describe('inspection history integrity', () => {
+  const listing = (date: string, score: number) => ({
+    ...page1[0],
+    id: 'SElTVE9SWQ==',
+    columns: {
+      ...page1[0].columns,
+      '4': `Last Inspection Score: ${score}`,
+      '5': `Last Inspection Date: ${date}`,
+    },
+  });
+  const inspection = (inspectionId: number, date: string): PortalInspectionRecord => ({
+    inspectionId,
+    facilityId: 'SElTVE9SWQ==',
+    printablePath: '',
+    date,
+    purpose: 'Routine',
+    score: 90,
+    inspector: 'Inspector',
+    violations: [],
+  });
+  const facility = (db: ReturnType<typeof createDb>['db']) =>
+    db.select().from(facilities).where(eq(facilities.id, 'SElTVE9SWQ==')).get();
+  const inspectionCount = (db: ReturnType<typeof createDb>['db']) =>
+    db.select().from(inspections).where(eq(inspections.facilityId, 'SElTVE9SWQ==')).all().length;
+
+  it('leaves the facility row unchanged when the history fetch fails, so the next run retries', async () => {
+    const { db } = createDb(':memory:');
+    const first = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [listing('08-01-2026', 90)], 2: [] } },
+      inspectionsByFacility: { 'SElTVE9SWQ==': [inspection(1, '2026-08-01')] },
+    });
+    await syncCounty(db, first, 'LONG');
+
+    const failing = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [listing('10-01-2026', 80)], 2: [] } },
+      inspectionsByFacility: {},
+    });
+    failing.getInspections = async () => {
+      throw new Error('portal down');
+    };
+    await expect(syncCounty(db, failing, 'LONG')).rejects.toThrow('portal down');
+    expect(facility(db)?.lastInspectionDate).toBe('2026-08-01');
+    expect(facility(db)?.lastInspectionScore).toBe(90);
+
+    const recovered = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [listing('10-01-2026', 80)], 2: [] } },
+      inspectionsByFacility: { 'SElTVE9SWQ==': [inspection(2, '2026-10-01'), inspection(1, '2026-08-01')] },
+    });
+    await syncCounty(db, recovered, 'LONG');
+    expect(recovered.inspectionCalls).toEqual(['SElTVE9SWQ==']);
+    expect(facility(db)?.lastInspectionDate).toBe('2026-10-01');
+    expect(inspectionCount(db)).toBe(2);
+  });
+
+  it('does not store a new facility when its first history fetch fails', async () => {
+    const { db } = createDb(':memory:');
+    const failing = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [listing('10-01-2026', 80)], 2: [] } },
+      inspectionsByFacility: {},
+    });
+    failing.getInspections = async () => {
+      throw new Error('portal down');
+    };
+    await expect(syncCounty(db, failing, 'LONG')).rejects.toThrow('portal down');
+    expect(facility(db)).toBeUndefined();
+  });
+
+  it('flags a history missing the listed inspection and retries it after the walk', async () => {
+    const { db } = createDb(':memory:');
+    const notYetPosted = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [listing('10-01-2026', 80)], 2: [] } },
+      inspectionsByFacility: { 'SElTVE9SWQ==': [inspection(1, '2026-08-01')] },
+    });
+    const first = await syncCounty(db, notYetPosted, 'LONG');
+    expect(first.historiesPending).toBe(1);
+    expect(facility(db)?.historyPending).toBe(true);
+    // The listing itself is still stored as the portal shows it.
+    expect(facility(db)?.lastInspectionDate).toBe('2026-10-01');
+
+    // Next run: a newer facility fills page 1 and the walk stops at the watermark
+    // before reaching this one, so only the post-walk retry can pick it up.
+    const newer = { ...listing('10-20-2026', 95), id: 'TkVXRVI=' };
+    const older = { ...listing('01-01-2026', 95), id: 'T0xERVI=' };
+    const posted = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [newer], 2: [older], 3: [] } },
+      inspectionsByFacility: {
+        'SElTVE9SWQ==': [inspection(2, '2026-10-01'), inspection(1, '2026-08-01')],
+      },
+    });
+    db.update(syncState).set({ watermark: '2026-10-15' }).where(eq(syncState.county, 'LONG')).run();
+    const second = await syncCounty(db, posted, 'LONG');
+
+    expect(posted.searchCalls.map((c) => c.page)).toEqual([1, 2]);
+    expect(posted.inspectionCalls).toContain('SElTVE9SWQ==');
+    expect(second.historiesRetried).toBeGreaterThanOrEqual(1);
+    expect(facility(db)?.historyPending).toBe(false);
+    expect(inspectionCount(db)).toBe(2);
+  });
+
+  it('continues after a pending history fetch fails and retries that facility on the next sync', async () => {
+    const { db } = createDb(':memory:');
+    const secondId = 'UkVUUlk=';
+    const initial = new FixturePortalClient({
+      pagesByCounty: {
+        LONG: { 1: [listing('10-01-2026', 80), { ...listing('10-01-2026', 90), id: secondId }] },
+      },
+      inspectionsByFacility: { 'SElTVE9SWQ==': [inspection(1, '2026-08-01')] },
+    });
+    await syncCounty(db, initial, 'LONG');
+    const beforeFailure = facility(db);
+
+    const retry = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [] } },
+      inspectionsByFacility: {
+        [secondId]: [{ ...inspection(2, '2026-10-01'), facilityId: secondId }],
+      },
+    });
+    const error = new Error('portal down');
+    const fetch = vi.spyOn(retry, 'getInspections').mockRejectedValueOnce(error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await syncCounty(db, retry, 'LONG');
+
+      expect(fetch.mock.calls).toEqual([['SElTVE9SWQ=='], [secondId]]);
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        '[sync] county=LONG facility=SElTVE9SWQ== history retry failed:',
+        error,
+      );
+      expect(result.historiesPending).toBe(1);
+      expect(result.historiesRetried).toBe(1);
+      expect(result.inspectionsUpserted).toBe(1);
+      expect(facility(db)).toEqual(beforeFailure);
+      expect(inspectionCount(db)).toBe(1);
+      expect(db.select().from(facilities).where(eq(facilities.id, secondId)).get()?.historyPending).toBe(false);
+
+      const recovered = new FixturePortalClient({
+        pagesByCounty: { LONG: { 1: [] } },
+        inspectionsByFacility: {
+          'SElTVE9SWQ==': [inspection(3, '2026-10-01'), inspection(1, '2026-08-01')],
+        },
+      });
+      const next = await syncCounty(db, recovered, 'LONG');
+
+      expect(recovered.inspectionCalls).toEqual(['SElTVE9SWQ==']);
+      expect(next.historiesRetried).toBe(1);
+      expect(next.historiesPending).toBe(0);
+      expect(facility(db)?.historyPending).toBe(false);
+      expect(inspectionCount(db)).toBe(2);
+    } finally {
+      log.mockRestore();
+      fetch.mockRestore();
+    }
+  });
+
+  it('accepts a history whose newest inspection is later than the listed date', async () => {
+    const { db } = createDb(':memory:');
+    const client = new FixturePortalClient({
+      pagesByCounty: { LONG: { 1: [listing('03-12-2026', 88)], 2: [] } },
+      inspectionsByFacility: { 'SElTVE9SWQ==': [inspection(2, '2026-09-11'), inspection(1, '2026-03-01')] },
+    });
+    await syncCounty(db, client, 'LONG');
+    expect(facility(db)?.historyPending).toBe(false);
   });
 });

@@ -29,6 +29,7 @@ function migrate(sqlite: Database.Database) {
       phone TEXT NOT NULL DEFAULT '',
       last_inspection_score INTEGER,
       last_inspection_date TEXT,
+      history_pending INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS facilities_county_idx ON facilities(county);
@@ -74,6 +75,29 @@ function migrate(sqlite: Database.Database) {
       last_synced_at TEXT
     );
   `);
+
+  const facilityColumns = sqlite.prepare('PRAGMA table_info(facilities)').all() as { name: string }[];
+  if (!facilityColumns.some((c) => c.name === 'history_pending')) {
+    // One-time upgrade of a DB from before history_pending. Older syncs saved
+    // the portal's "No Inspections To Display" placeholder as an inspection, and
+    // could mark a facility current before its history was saved, so drop the
+    // placeholders and flag every facility whose history is missing its latest
+    // inspection; the next sync of its county re-fetches them.
+    sqlite.transaction(() => {
+      sqlite.exec(`
+        ALTER TABLE facilities ADD COLUMN history_pending INTEGER NOT NULL DEFAULT 0;
+        DELETE FROM violations WHERE inspection_id IN
+          (SELECT id FROM inspections WHERE inspection_id = 0 OR inspection_date = '');
+        DELETE FROM inspections WHERE inspection_id = 0 OR inspection_date = '';
+        UPDATE facilities SET history_pending = 1
+        WHERE last_inspection_date IS NOT NULL AND last_inspection_date <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM inspections i
+            WHERE i.facility_id = facilities.id AND i.inspection_date >= facilities.last_inspection_date
+          );
+      `);
+    })();
+  }
 }
 
 export type AppDb = ReturnType<typeof createDb>['db'];
