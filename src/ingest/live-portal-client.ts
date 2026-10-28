@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { PortalClient, PortalFacilityRecord, PortalInspectionRecord, PortalViolation } from './portal-client.js';
 
 const BASE = 'https://ga.healthinspections.us/stateofgeorgia/API/index.cfm';
@@ -141,6 +142,69 @@ export function base64Encode(value: string): string {
   return Buffer.from(value, 'utf-8').toString('base64');
 }
 
+/**
+ * A date column must hold MM-DD-YYYY, or no digits at all (never-inspected
+ * facilities show "NA"). Digits in any other shape mean the portal changed its
+ * date format, which would otherwise turn every date into '' without a sound.
+ */
+function isKnownDateFormat(value: string | undefined): boolean {
+  const v = stripLabel(value);
+  return !/\d/.test(v) || /\d{2}-\d{2}-\d{4}/.test(v);
+}
+
+const facilityRecordSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string(),
+    mapAddress: z.string().default(''),
+    columns: z.record(z.string(), z.string()),
+  })
+  .refine((r) => isKnownDateFormat(r.columns['5']), {
+    message: 'unrecognized Last Inspection Date format',
+    path: ['columns', '5'],
+  });
+
+const inspectionRecordSchema = z
+  .object({
+    inspectionId: z.number().int(),
+    facilityId: z.string(),
+    printablePath: z.string().optional(),
+    columns: z.record(z.string(), z.string()),
+    violations: z
+      .union([z.record(z.string(), z.array(z.string().nullable())), z.array(z.array(z.string().nullable()))])
+      .optional(),
+  })
+  // inspectionId 0 is the "No Inspections To Display" placeholder, which has no date.
+  .refine((r) => r.inspectionId === 0 || /\d{2}-\d{2}-\d{4}/.test(r.columns['0'] ?? ''), {
+    message: 'missing or unrecognized inspection Date',
+    path: ['columns', '0'],
+  });
+
+/** Records whose shape doesn't match what the parsers expect. Not retried. */
+export class PortalSchemaError extends Error {}
+
+/**
+ * Keep the records that match `schema`, logging the ones that don't. When
+ * `failIfMostInvalid` is set and over half the records are bad, throw instead:
+ * that's a format change, not a stray record, and it should fail the county
+ * loudly rather than skip everything.
+ */
+function validRecords<T>(data: unknown[], schema: z.ZodType<T>, url: string, failIfMostInvalid: boolean): T[] {
+  const valid: T[] = [];
+  const problems: string[] = [];
+  for (const item of data) {
+    const result = schema.safeParse(item);
+    if (result.success) valid.push(result.data);
+    else problems.push(z.prettifyError(result.error));
+  }
+  if (problems.length > 0) {
+    const detail = `${problems.length}/${data.length} malformed records from ${url}: ${problems[0]}`;
+    if (failIfMostInvalid && problems.length * 2 > data.length) throw new PortalSchemaError(detail);
+    console.warn(`[portal] skipped ${detail}`);
+  }
+  return valid;
+}
+
 export interface LivePortalClientOptions {
   /** Minimum gap between requests; the portal is shared, so keep this at 1s in production. */
   minIntervalMs?: number;
@@ -163,7 +227,8 @@ export class LivePortalClient implements PortalClient {
       city: '',
     });
     const url = `${BASE}/search/${encodeURIComponent(query)}/${page}`;
-    return (await fetchJsonArrayWithRetry(url, this.limiter, this.retry)) as PortalFacilityRecord[];
+    const data = await fetchJsonArrayWithRetry(url, this.limiter, this.retry);
+    return validRecords<PortalFacilityRecord>(data, facilityRecordSchema, url, true);
   }
 
   async getInspections(facilityId: string): Promise<PortalInspectionRecord[]> {
@@ -171,6 +236,10 @@ export class LivePortalClient implements PortalClient {
     const data = await fetchJsonArrayWithRetry(url, this.limiter, this.retry);
     // A facility with nothing posted yet comes back as one placeholder row
     // ("No Inspections To Display", inspectionId 0, no date); it's not an inspection.
-    return data.map(parseInspectionRecord).filter((r) => r.inspectionId > 0 && r.date !== '');
+    // A bad record here is skipped, never fatal: the history then lacks that
+    // inspection, so the facility stays history_pending and is retried.
+    return validRecords(data, inspectionRecordSchema, url, false)
+      .map(parseInspectionRecord)
+      .filter((r) => r.inspectionId > 0 && r.date !== '');
   }
 }
