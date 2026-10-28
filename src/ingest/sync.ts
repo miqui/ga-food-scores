@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { facilities, inspections, violations, syncState } from '../db/schema.js';
 import type { AppDb } from '../db/client.js';
-import type { PortalClient, PortalFacilityRecord } from './portal-client.js';
+import type { PortalClient, PortalFacilityRecord, PortalInspectionRecord } from './portal-client.js';
 
 function stripLabel(value: string | undefined): string {
   if (!value) return '';
@@ -63,7 +63,63 @@ export interface SyncResult {
   facilitiesWithNewInspections: number;
   inspectionsUpserted: number;
   violationsUpserted: number;
+  /** Pending facilities from earlier runs that this run re-fetched outside the walk. */
+  historiesRetried: number;
+  /** Facilities in this county whose history still lacks their latest inspection. */
+  historiesPending: number;
   newWatermark: string | null;
+}
+
+type Tx = Parameters<Parameters<AppDb['transaction']>[0]>[0];
+
+/**
+ * The portal can list a facility's new inspection before the inspection itself
+ * is posted, so a history only counts as complete once it has an inspection on
+ * or after the listed date. (The listing can also lag behind the history, so
+ * this is not an exact-date match.)
+ */
+function historyIsComplete(lastInspectionDate: string | null, history: PortalInspectionRecord[]): boolean {
+  return !lastInspectionDate || history.some((i) => i.date >= lastInspectionDate);
+}
+
+/** Upsert a facility's inspections and replace their violations. Returns row counts. */
+function saveHistory(tx: Tx, facilityId: string, history: PortalInspectionRecord[]) {
+  let inspectionsUpserted = 0;
+  let violationsUpserted = 0;
+  for (const insp of history) {
+    const fields = {
+      inspectionDate: insp.date,
+      purpose: insp.purpose,
+      score: insp.score,
+      inspector: insp.inspector,
+      reportUrl: insp.printablePath,
+    };
+    const row = tx
+      .insert(inspections)
+      .values({ inspectionId: insp.inspectionId, facilityId, ...fields })
+      .onConflictDoUpdate({ target: inspections.inspectionId, set: fields })
+      .returning({ id: inspections.id })
+      .get();
+    inspectionsUpserted += 1;
+
+    // Replace violations for this inspection to avoid duplicate accumulation on re-sync.
+    tx.delete(violations).where(eq(violations.inspectionId, row.id)).run();
+    for (const v of insp.violations) {
+      tx.insert(violations)
+        .values({
+          inspectionId: row.id,
+          code: v.code,
+          ruleCitation: v.ruleCitation,
+          points: v.points,
+          correctedOnSite: v.correctedOnSite,
+          repeat: v.repeat,
+          notes: v.notes,
+        })
+        .run();
+      violationsUpserted += 1;
+    }
+  }
+  return { inspectionsUpserted, violationsUpserted };
 }
 
 /** Hard safety stop for a runaway walk; FULTON is ~1700 pages, so this leaves lots of headroom. */
@@ -78,8 +134,13 @@ export const DEFAULT_MAX_PAGES = 10_000;
  * If maxPages is hit before the results run out, the run throws without
  * advancing the watermark, so the next run starts over instead of skipping
  * the unwalked tail.
- * Facilities whose last-inspection score/date changed (or are new) get their
- * full inspection + violation history re-fetched.
+ * Facilities whose last-inspection score/date changed (or are new, or still
+ * pending) get their full inspection + violation history re-fetched. The fetch
+ * happens before any write, and the facility row and its history are saved in
+ * one transaction, so a failed fetch or a killed run never leaves a facility
+ * marked current without its inspections.
+ * After the walk, facilities still flagged history_pending that the walk didn't
+ * reach (an incremental walk stops at the watermark) are re-fetched directly.
  */
 export async function syncCounty(
   db: AppDb,
@@ -98,6 +159,8 @@ export async function syncCounty(
   let facilitiesWithNewInspections = 0;
   let inspectionsUpserted = 0;
   let violationsUpserted = 0;
+  let historiesRetried = 0;
+  const fetchedThisRun = new Set<string>();
   let newestDateSeen: string | null = null;
   const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
   let reachedEnd = false;
@@ -135,75 +198,33 @@ export async function syncCounty(
       }
 
       const existing = db.select().from(facilities).where(eq(facilities.id, parsed.id)).get();
-      const scoreChanged =
+      const needsHistory =
         !existing ||
+        existing.historyPending ||
         existing.lastInspectionScore !== parsed.lastInspectionScore ||
         existing.lastInspectionDate !== parsed.lastInspectionDate;
 
-      db.insert(facilities)
-        .values({ ...parsed, updatedAt: new Date().toISOString() })
-        .onConflictDoUpdate({
-          target: facilities.id,
-          set: { ...parsed, updatedAt: new Date().toISOString() },
-        })
-        .run();
+      // Fetch before writing anything: if this throws, the facility row is left as
+      // it was, so the next run still sees the change and fetches again.
+      const history = needsHistory ? await client.getInspections(parsed.id) : [];
+      if (needsHistory) fetchedThisRun.add(parsed.id);
+      const row = {
+        ...parsed,
+        historyPending: needsHistory && !historyIsComplete(parsed.lastInspectionDate, history),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const saved = db.transaction((tx) => {
+        tx.insert(facilities)
+          .values(row)
+          .onConflictDoUpdate({ target: facilities.id, set: row })
+          .run();
+        return saveHistory(tx, parsed.id, history);
+      });
       facilitiesUpserted += 1;
-
-      if (scoreChanged) {
-        facilitiesWithNewInspections += 1;
-        const history = await client.getInspections(parsed.id);
-        for (const insp of history) {
-          const insertResult = db
-            .insert(inspections)
-            .values({
-              inspectionId: insp.inspectionId,
-              facilityId: parsed.id,
-              inspectionDate: insp.date,
-              purpose: insp.purpose,
-              score: insp.score,
-              inspector: insp.inspector,
-              reportUrl: insp.printablePath,
-            })
-            .onConflictDoUpdate({
-              target: inspections.inspectionId,
-              set: {
-                inspectionDate: insp.date,
-                purpose: insp.purpose,
-                score: insp.score,
-                inspector: insp.inspector,
-                reportUrl: insp.printablePath,
-              },
-            })
-            .run();
-          inspectionsUpserted += 1;
-
-          const inspectionRow = db
-            .select()
-            .from(inspections)
-            .where(eq(inspections.inspectionId, insp.inspectionId))
-            .get();
-          const localInspectionId = inspectionRow
-            ? inspectionRow.id
-            : Number(insertResult.lastInsertRowid);
-
-          // Replace violations for this inspection to avoid duplicate accumulation on re-sync.
-          db.delete(violations).where(eq(violations.inspectionId, localInspectionId)).run();
-          for (const v of insp.violations) {
-            db.insert(violations)
-              .values({
-                inspectionId: localInspectionId,
-                code: v.code,
-                ruleCitation: v.ruleCitation,
-                points: v.points,
-                correctedOnSite: v.correctedOnSite,
-                repeat: v.repeat,
-                notes: v.notes,
-              })
-              .run();
-            violationsUpserted += 1;
-          }
-        }
-      }
+      if (needsHistory) facilitiesWithNewInspections += 1;
+      inspectionsUpserted += saved.inspectionsUpserted;
+      violationsUpserted += saved.violationsUpserted;
     }
 
     if (watermark && allBelowWatermark) {
@@ -228,6 +249,33 @@ export async function syncCounty(
     })
     .run();
 
+  // Runs after the watermark is saved, so a failed retry doesn't undo the walk.
+  const pending = db
+    .select({ id: facilities.id, lastInspectionDate: facilities.lastInspectionDate })
+    .from(facilities)
+    .where(and(eq(facilities.county, county), eq(facilities.historyPending, true)))
+    .all()
+    .filter((f) => !fetchedThisRun.has(f.id));
+  for (const f of pending) {
+    const history = await client.getInspections(f.id);
+    const saved = db.transaction((tx) => {
+      tx.update(facilities)
+        .set({ historyPending: !historyIsComplete(f.lastInspectionDate, history) })
+        .where(eq(facilities.id, f.id))
+        .run();
+      return saveHistory(tx, f.id, history);
+    });
+    historiesRetried += 1;
+    inspectionsUpserted += saved.inspectionsUpserted;
+    violationsUpserted += saved.violationsUpserted;
+  }
+
+  const historiesPending = db
+    .select({ id: facilities.id })
+    .from(facilities)
+    .where(and(eq(facilities.county, county), eq(facilities.historyPending, true)))
+    .all().length;
+
   return {
     county,
     pagesWalked,
@@ -237,6 +285,8 @@ export async function syncCounty(
     facilitiesWithNewInspections,
     inspectionsUpserted,
     violationsUpserted,
+    historiesRetried,
+    historiesPending,
     newWatermark,
   };
 }

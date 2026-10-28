@@ -13,6 +13,8 @@ export const facilities = sqliteTable(
     phone: text('phone').notNull().default(''),
     lastInspectionScore: integer('last_inspection_score'),
     lastInspectionDate: text('last_inspection_date'), // ISO yyyy-mm-dd
+    // The stored history doesn't yet include lastInspectionDate; sync retries it.
+    historyPending: integer('history_pending', { mode: 'boolean' }).notNull().default(false),
     updatedAt: text('updated_at').notNull(),
   },
   (t) => ({

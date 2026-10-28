@@ -120,6 +120,10 @@ export class LivePortalClient implements PortalClient {
   async getInspections(facilityId: string): Promise<PortalInspectionRecord[]> {
     const url = `${BASE}/inspectionsData/${encodeURIComponent(facilityId)}`;
     const data = (await fetchJsonWithRetry(url, this.limiter)) as any[];
-    return Array.isArray(data) ? data.map(parseInspectionRecord) : [];
+    // A facility with nothing posted yet comes back as one placeholder row
+    // ("No Inspections To Display", inspectionId 0, no date); it's not an inspection.
+    return Array.isArray(data)
+      ? data.map(parseInspectionRecord).filter((r) => r.inspectionId > 0 && r.date !== '')
+      : [];
   }
 }
